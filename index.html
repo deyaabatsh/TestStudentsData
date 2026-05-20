@@ -104,21 +104,36 @@ textarea { resize:vertical; min-height:72px; }
   h1 { font-size:20px; }
   .btn { padding:13px 32px; font-size:14px; }
 }
-.upload-wrap {
-  position:relative; border:2px dashed var(--border); border-radius:9px;
+.camera-wrap {
+  border:2px dashed var(--border); border-radius:9px;
   padding:18px 12px; text-align:center; background:var(--gray-l);
-  cursor:pointer; transition:border-color .15s,background .15s; overflow:hidden;
+  overflow:hidden; transition:border-color .15s,background .15s;
 }
-.upload-wrap:hover { border-color:#2563ab; background:#e8f0fa; }
-.upload-wrap.has-file { border-color:#2a7a5a; background:#edf7f2; }
-.upload-wrap input[type=file] {
-  position:absolute; inset:0; opacity:0; cursor:pointer;
-  width:100%; height:100%; border:none; background:none; box-shadow:none; padding:0;
+.camera-wrap.has-photo { border-color:#2a7a5a; background:#edf7f2; }
+#cam-video {
+  width:100%; max-height:260px; border-radius:8px;
+  object-fit:cover; display:block; background:#000;
 }
-.upload-icon { font-size:24px; margin-bottom:5px; display:block; }
-.upload-text { font-size:12px; color:var(--gray); }
-.upload-hint { font-size:11px; color:var(--gray); margin-top:3px; }
-.file-preview { font-size:12px; color:#2a7a5a; font-weight:500; margin-top:4px; display:none; }
+.cam-controls { display:flex; justify-content:center; gap:10px; margin-top:10px; flex-wrap:wrap; }
+.cam-btn-open {
+  background:linear-gradient(135deg,var(--green),var(--green-l));
+  color:#fff; border:none; padding:10px 28px; border-radius:50px;
+  font-family:'Cairo',sans-serif; font-size:14px; font-weight:700; cursor:pointer; margin-top:8px;
+}
+.cam-btn-capture {
+  background:linear-gradient(135deg,#2a7a5a,#3a9a6a);
+  color:#fff; border:none; padding:10px 28px; border-radius:50px;
+  font-family:'Cairo',sans-serif; font-size:14px; font-weight:700; cursor:pointer;
+}
+.cam-btn-close, .cam-btn-retake {
+  background:#f3f4f6; color:#374151; border:1px solid var(--border);
+  padding:10px 20px; border-radius:50px;
+  font-family:'Cairo',sans-serif; font-size:13px; cursor:pointer;
+}
+.cam-idle-icon { font-size:28px; margin-bottom:6px; display:block; }
+.cam-idle-text { font-size:12px; color:var(--gray); margin-bottom:4px; }
+#cam-preview { width:100%; max-height:260px; object-fit:cover; border-radius:8px; display:block; }
+.cam-ok-label { color:#2a7a5a; font-weight:700; font-size:13px; }
 #success-screen {
   display:none; position:fixed; inset:0;
   background:linear-gradient(160deg,#f0f3f7,#eef3fa,#f5f0fb);
@@ -595,12 +610,29 @@ textarea { resize:vertical; min-height:72px; }
     </div>
     <div class="fg">
       <label>صورة الطفل <span class="req">*</span></label>
-      <div class="upload-wrap" id="photo-wrap">
-        <input type="file" accept="image/*" onchange="handlePhotoUpload(this)">
-        <span class="upload-icon">🖼️</span>
-        <div class="upload-text">اضغط لرفع صورة الطفل</div>
-        <div class="upload-hint">JPG, PNG — حد أقصى 5MB</div>
-        <div class="file-preview" id="photo-name"></div>
+      <div class="camera-wrap" id="photo-wrap">
+        <!-- الحالة 1: الزر الابتدائي -->
+        <div id="cam-idle">
+          <span class="cam-idle-icon">📷</span>
+          <div class="cam-idle-text">اضغط لفتح الكاميرا والتصوير</div>
+          <button type="button" class="cam-btn-open" onclick="openCamera()">فتح الكاميرا</button>
+        </div>
+        <!-- الحالة 2: بث مباشر -->
+        <div id="cam-active" style="display:none">
+          <video id="cam-video" autoplay playsinline muted></video>
+          <div class="cam-controls">
+            <button type="button" class="cam-btn-capture" onclick="capturePhoto()">📸 التقاط الصورة</button>
+            <button type="button" class="cam-btn-close" onclick="closeCamera()">✕ إغلاق</button>
+          </div>
+        </div>
+        <!-- الحالة 3: صورة ملتقطة -->
+        <div id="cam-result" style="display:none">
+          <img id="cam-preview" alt="صورة الطفل">
+          <div class="cam-controls">
+            <span class="cam-ok-label">✅ تم التقاط الصورة</span>
+            <button type="button" class="cam-btn-retake" onclick="retakePhoto()">🔄 إعادة التصوير</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -1023,28 +1055,54 @@ async function confirmAndSubmit() {
 }
 
 var photoData = null;
-function handlePhotoUpload(input) {
-  if (!input.files || !input.files[0]) return;
-  var file = input.files[0];
-  var reader = new FileReader();
-  reader.onload = function(e) {
-    var img = new Image();
-    img.onload = function() {
-      var canvas = document.createElement('canvas');
-      var MAX_WIDTH = 800;
-      var scale = Math.min(1, MAX_WIDTH / img.width);
-      canvas.width = img.width * scale;
-      canvas.height = img.height * scale;
-      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-      photoData = canvas.toDataURL('image/jpeg', 0.6);
-      document.getElementById('photo-wrap').classList.add('has-file');
-      var n = document.getElementById('photo-name');
-      n.style.display = 'block';
-      n.textContent = 'تم تجهيز الصورة: ' + file.name;
-    };
-    img.src = e.target.result;
-  };
-  reader.readAsDataURL(file);
+var cameraStream = null;
+
+function openCamera() {
+  var constraints = { video: { facingMode: { ideal: 'environment' } }, audio: false };
+  navigator.mediaDevices.getUserMedia(constraints)
+    .catch(function() { return navigator.mediaDevices.getUserMedia({ video: true, audio: false }); })
+    .then(function(stream) {
+      cameraStream = stream;
+      var v = document.getElementById('cam-video');
+      v.srcObject = stream;
+      document.getElementById('cam-idle').style.display   = 'none';
+      document.getElementById('cam-active').style.display = 'block';
+      document.getElementById('cam-result').style.display = 'none';
+    })
+    .catch(function(err) {
+      toast('تعذّر فتح الكاميرا: ' + err.message, 'fail');
+    });
+}
+
+function capturePhoto() {
+  var v = document.getElementById('cam-video');
+  var c = document.createElement('canvas');
+  var W = v.videoWidth || 640, H = v.videoHeight || 480;
+  var scale = Math.min(1, 800 / W);
+  c.width = W * scale; c.height = H * scale;
+  c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+  photoData = c.toDataURL('image/jpeg', 0.7);
+  closeCamera();
+  document.getElementById('cam-preview').src    = photoData;
+  document.getElementById('cam-active').style.display = 'none';
+  document.getElementById('cam-idle').style.display   = 'none';
+  document.getElementById('cam-result').style.display = 'block';
+  var pw = document.getElementById('photo-wrap');
+  pw.classList.add('has-photo');
+  pw.style.borderColor = '';
+}
+
+function closeCamera() {
+  if (cameraStream) { cameraStream.getTracks().forEach(function(t){ t.stop(); }); cameraStream = null; }
+  var v = document.getElementById('cam-video');
+  if (v) v.srcObject = null;
+}
+
+function retakePhoto() {
+  photoData = null;
+  document.getElementById('photo-wrap').classList.remove('has-photo');
+  document.getElementById('cam-result').style.display = 'none';
+  openCamera();
 }
 
 function resetForm() {
@@ -1052,10 +1110,12 @@ function resetForm() {
   document.getElementById('frm').reset();
   photoData = null;
   currentPledgeRef = '';
+  closeCamera();
+  document.getElementById('cam-idle').style.display   = 'block';
+  document.getElementById('cam-active').style.display = 'none';
+  document.getElementById('cam-result').style.display = 'none';
   var wrap = document.getElementById('photo-wrap');
-  if (wrap) wrap.classList.remove('has-file');
-  var n = document.getElementById('photo-name');
-  if (n) { n.style.display='none'; n.textContent=''; }
+  if (wrap) { wrap.classList.remove('has-photo'); wrap.style.borderColor = ''; }
   window.scrollTo({top:0,behavior:'smooth'});
 }
 
